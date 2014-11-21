@@ -166,8 +166,8 @@ class Profile:
 		args = args.replace("${auth_player_name}", username)
 		args = args.replace("${version_name}", self.version)
 		args = args.replace("${game_directory}", ".")
-		args = args.replace("${game_assets}", "assets")		# Not even used.
-		args = args.replace("${assets_root}", "assets")		# Not even used.
+		args = args.replace("${game_assets}", "assets")
+		args = args.replace("${assets_root}", "assets")
 		args = args.replace("${auth_uuid}", "null")
 		args = args.replace("${auth_access_token}", "null")
 		args = args.replace("${assets_index_name}", self.versionInfo.get("assets", "legacy"))
@@ -176,6 +176,23 @@ class Profile:
 
 		return 'java -cp "%s" -Djava.library.path=natives %s %s' % (cp, self.mainClass, args)
 
+# Duplicate because YOLO
+def downloadFile(filename, url):
+	print ">Download " + filename
+	dirname = filename.rsplit("/", 1)[0]
+	makeDir(dirname)
+
+	inf = urllib.urlopen(url)
+	outf = open(filename, "wb")
+	while 1:
+		b = inf.read(1)
+		if len(b) == 0:
+			break
+		else:
+			outf.write(b)
+	inf.close()
+	outf.close()
+		
 launcherProfiles = {
 	"selectedProfile": "N/A",
 	"profiles": {}
@@ -206,7 +223,9 @@ def actionLoop():
 	print " 1. Launch a profile."
 	print " 2. Create a new profile (or replace one)."
 	print " 3. Delete a profile."
-	choice = raw_input("Choice (1-3): ")
+	print " 4. Create a profile with custom version info"
+	
+	choice = raw_input("Choice (1-4): ")
 	if choice == "1":
 		name = raw_input("Profile to launch: ")
 		if not launcherProfiles["profiles"].has_key(name):
@@ -232,6 +251,35 @@ def actionLoop():
 		if launcherProfiles["profiles"].has_key(name):
 			del launcherProfiles["profiles"][name]
 		print "Profile deleted :)"
+	elif choice == "4":
+		name = raw_input("Profile name to create: ")
+		profinfo = raw_input("Profinfo file: ")
+
+		print ">Get profinfo"
+		info = {}
+		try:
+			f = urllib.urlopen(profinfo)
+			data = f.read()
+			f.close()
+			info = json.loads(data)
+		except:
+			print "proinfo failed"
+			return
+
+		print ">Download patch files"
+		basedir = profinfo.rsplit("/", 1)[0]
+		for filename in info["files"]:
+			if not os.path.exists(filename):
+				downloadFile(filename, basedir+"/"+filename)
+
+		print ">Create profile"
+		profile = {
+			"name": name,
+			"lastVersionId": info["version"]
+		}
+		launcherProfiles["profiles"][name] = profile
+		saveProfiles()
+		print "Profile created :)"
 
 while True:
 	actionLoop()
