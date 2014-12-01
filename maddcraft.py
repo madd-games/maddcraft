@@ -192,11 +192,6 @@ def downloadFile(filename, url):
 			outf.write(b)
 	inf.close()
 	outf.close()
-		
-launcherProfiles = {
-	"selectedProfile": "N/A",
-	"profiles": {}
-}
 
 try:
 	f = open("mcdata/launcher_profiles.json", "rb")
