@@ -143,7 +143,7 @@ class Profile:
 		inf = urllib.urlopen(url)
 		outf = open(filename, "wb")
 		while 1:
-			b = inf.read(512)
+			b = inf.read(4096)
 			if len(b) == 0:
 				break
 			else:
@@ -186,7 +186,7 @@ def downloadFile(filename, url):
 	inf = urllib.urlopen(url)
 	outf = open(filename, "wb")
 	while 1:
-		b = inf.read(512)
+		b = inf.read(4096)
 		if len(b) == 0:
 			break
 		else:
