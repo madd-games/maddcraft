@@ -120,7 +120,8 @@ class Profile:
 		assetsName = self.versionInfo.get("assets", "legacy")
 		assetsIndexFile = "mcdata/assets/indexes/%s.json" % assetsName
 		assetsIndexLink = "https://s3.amazonaws.com/Minecraft.Download/indexes/%s.json" % assetsName
-		self.downloadFile(assetsIndexFile, assetsIndexLink)
+		if not os.path.exists(assetsIndexFile):
+			self.downloadFile(assetsIndexFile, assetsIndexLink)
 
 		f = open(assetsIndexFile, "rb")
 		assetsData = json.loads(f.read())
@@ -142,7 +143,7 @@ class Profile:
 		inf = urllib.urlopen(url)
 		outf = open(filename, "wb")
 		while 1:
-			b = inf.read(1)
+			b = inf.read(512)
 			if len(b) == 0:
 				break
 			else:
@@ -174,7 +175,7 @@ class Profile:
 		args = args.replace("${user_properties}", "{}")
 		args = args.replace("${user_type}", "offline")
 
-		return 'java -cp "%s" -Djava.library.path=natives %s %s' % (cp, self.mainClass, args)
+		return 'java -cp "%s" -Dfml.ignoreInvalidMinecraftCertificates=true  -Djava.library.path=natives %s %s' % (cp, self.mainClass, args)
 
 # Duplicate because YOLO
 def downloadFile(filename, url):
@@ -185,7 +186,7 @@ def downloadFile(filename, url):
 	inf = urllib.urlopen(url)
 	outf = open(filename, "wb")
 	while 1:
-		b = inf.read(1)
+		b = inf.read(512)
 		if len(b) == 0:
 			break
 		else:
@@ -224,7 +225,7 @@ def actionLoop():
 	print " 2. Create a new profile (or replace one)."
 	print " 3. Delete a profile."
 	print " 4. Create a profile with custom version info"
-	
+	print "(NOTE: There is also a command-line interface; type '%s usage' for more info)" % sys.argv[0]
 	choice = raw_input("Choice (1-4): ")
 	if choice == "1":
 		name = raw_input("Profile to launch: ")
@@ -281,6 +282,31 @@ def actionLoop():
 		saveProfiles()
 		print "Profile created :)"
 
-while True:
-	actionLoop()
+def usage():
+	sys.stderr.write("USAGE:\t%s usage\n" % sys.argv[0])
+	sys.stderr.write("\t\tDisplays this text.\n")
+	sys.stderr.write("\t%s launch <profile-name> <username>\n" % sys.argv[0])
+	sys.stderr.write("\t\tLaunch the specified profile, with the specified username.\n")
+	sys.exit(1)
+	
+if len(sys.argv) == 1:
+	while True:
+		actionLoop()
+else:
+	cmd = sys.argv[1]
+	if cmd == "usage":
+		usage()
+	elif cmd == "launch":
+		if len(sys.argv) != 4:
+			sys.stderr.write("invalid syntax\n")
+			usage()
 
+		name = sys.argv[2]
+		if not launcherProfiles["profiles"].has_key(name):
+			sys.stderr.write("%s: profile %s does not exist\n" % (sys.argv[0], name))
+			sys.exit(1)
+		username = sys.argv[3]
+		p = Profile(launcherProfiles["profiles"][name])
+		p.downloadMissingFiles()
+		print ">Starting Minecraft..."
+		os.system("cd mcdata && %s" % p.launchcmd(username))
