@@ -62,8 +62,8 @@ class Profile:
 		self.fileIndex = [("mcdata/versions/%s/%s.json" % (self.version, self.version),
 					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.json" % (self.version, self.version)),
 
-					("mcdata/versions/%s/%s.jar" % (self.version, self.version),
-					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.jar" % (self.version, self.version))
+#					("mcdata/versions/%s/%s.jar" % (self.version, self.version),
+#					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.jar" % (self.version, self.version))
 		]
 
 		# Try loading the version info so that we can launch.
@@ -83,6 +83,16 @@ class Profile:
 		self.mainClass = self.versionInfo["mainClass"]
 		self.mcargs = self.versionInfo["minecraftArguments"]
 		self.jar = "versions/%s/%s.jar" % (self.version, self.version)
+		
+		if self.versionInfo.has_key("inheritsFrom"):
+			self.versionInfo["libraries"].extend(self.getLibsFrom(self.versionInfo["inheritsFrom"]))
+			
+		if self.versionInfo.has_key("jar"):
+			jarname = self.versionInfo["jar"]
+			self.fileIndex.append(("mcdata/"+self.jar, "http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.jar" % (jarname, jarname)))
+		else:
+			self.fileIndex.append(("mcdata/"+self.jar, "http://s3.amazonaws.com/Minecraft.Download/"+self.jar))
+			
 		for libinfo in self.versionInfo["libraries"]:
 			librep = libinfo.get("url", "https://libraries.minecraft.net/")
 			name = libinfo["name"]
@@ -135,8 +145,24 @@ class Profile:
 				"http://resources.download.minecraft.net/%s/%s" % (pref, hash)
 			))
 
+	def getLibsFrom(self, version):
+		f = None
+		try:
+			f = open("mcdata/versions/%s/%s.json" % (version, version), "rb")
+		except IOError:
+			makeDir("mcdata/versions/%s" % self.version)
+			self.downloadFile("mcdata/versions/%s/%s.json" % (self.version, self.version),
+					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.json" % (self.version, self.version)
+			)
+			f = open("mcdata/versions/%s/%s.json" % (version, version), "rb")
+		sdata = f.read()
+		f.close()
+		
+		info = json.loads(sdata)
+		return info["libraries"]
+		
 	def downloadFile(self, filename, url):
-		print ">Download " + filename
+		print ">Download " + filename + " from " + url
 		dirname = filename.rsplit("/", 1)[0]
 		makeDir(dirname)
 
