@@ -1,5 +1,5 @@
 #! /usr/bin/python
-#	Copyright (c) 2014, Madd Games.
+#	Copyright (c) 2014-2016, Madd Games.
 #	All rights reserved.
 #	
 #	Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,10 @@
 import sys, os
 import json
 import urllib
+import ctypes
 from zipfile import ZipFile, BadZipfile		# JARs are secretly ZIP files.
+from socket import *
+from md5 import *
 
 currentOS = None
 if sys.platform.startswith("win"):
@@ -53,18 +56,73 @@ launcherProfiles = {
 	"profiles":	{}
 }
 
+def fileChecksum(filename):
+	f = open(filename, "rb")
+	data = f.read()
+	f.close()
+	return md5(data).hexdigest()
+
+def getModTable(modpath):
+	output = {}
+	for name in os.listdir(modpath):
+		output[name] = fileChecksum(modpath+"/"+name)
+	return output
+
+def getConfigTableSub(output, path, prefix):
+	for name in os.listdir(path):
+		fullpath = path+"/"+name
+		if os.path.isdir(fullpath):
+			getConfigTableSub(output, fullpath, prefix+"/"+name)
+		else:
+			output[prefix+"/"+name] = fileChecksum(fullpath)
+
+def getConfigTable(confpath):
+	output = {}
+	getConfigTableSub(output, confpath, "")
+	return output
+	
+def downloadFromModpack(hostname, request):
+	srv = openRequestPipe(hostname, request)
+	respline = readRespLine(srv)
+	if respline.startswith("MADDCRAFT 1.0 0"):
+		return None
+	size = int(respline.split(" ")[2])
+	data = ""
+	
+	while len(data) < size:
+		chunk = size - len(data)
+		if chunk > 4096:
+			chunk = 4096
+		data += srv.recv(chunk)
+	
+	srv.close()
+	return data
+
+def createModpackLinks(modDir, configDir):
+	makeDir("mcdata/"+modDir)
+	makeDir("mcdata/"+configDir)
+	
+	if currentOS=="windows":
+		os.system("rd mcdata\\mods")
+		os.system("rd mcdata\\config")
+		modDir=modDir.replace("/", "\\")
+		configDir=configDir.replace("/", "\\")
+		os.system("mklink /j mcdata\\mods mcdata\\"+modDir)
+		os.system("mklink /j mcdata\\config mcdata\\"+configDir)
+	else:
+		if os.path.exists("mcdata/mods"): os.remove("mcdata/mods")
+		if os.path.exists("mcdata/config"): os.remove("mcdata/config")
+		os.symlink(modDir, "mcdata/mods")
+		os.symlink(configDir, "mcdata/config")
+		
+
 class Profile:
 	def __init__(self, data):
 		self.data = data
 		self.name = data["name"]
 		self.version = data["lastVersionId"]
 		self.libs = []
-		self.fileIndex = [("mcdata/versions/%s/%s.json" % (self.version, self.version),
-					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.json" % (self.version, self.version)),
-
-#					("mcdata/versions/%s/%s.jar" % (self.version, self.version),
-#					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.jar" % (self.version, self.version))
-		]
+		self.fileIndex = []
 
 		# Try loading the version info so that we can launch.
 		f = None
@@ -144,15 +202,85 @@ class Profile:
 				"mcdata/assets/objects/%s/%s" % (pref, hash),
 				"http://resources.download.minecraft.net/%s/%s" % (pref, hash)
 			))
+		
+		modDir = "mods-single"
+		configDir = "config-single"
+		
+		if data.has_key("modpackServer"):
+			print ">Update resources"
+			makeDir("mcdata/mods-%s" % data["modpackServer"])
+			makeDir("mcdata/config-%s" % data["modpackServer"])
+			modDir = "mods-%s" % data["modpackServer"]
+			configDir = "config-%s" % data["modpackServer"]
+			myModTable = getModTable("mcdata/mods-" + data["modpackServer"])
+			jsonData = downloadFromModpack(data["modpackServer"], "MADDCRAFT 1.0 getrc %s" % data["modpackServer"])
+			if jsonData is None:
+				print "ERROR: failed to get resource data from server"
+				sys.exit(1)
+			srvModTable = json.loads(jsonData)["mods"]
+			
+			# delete mods that the server does not announce anymore
+			for modname in myModTable.keys():
+				if not srvModTable.has_key(modname):
+					print ">Remove %s" % modname
+					os.remove("mcdata/mods-%s/%s" % (data["modpackServer"], modname))
+			
+			# download mods which the client does not have or with mismatching checksums
+			for modname in srvModTable.keys():
+				shouldDownload = False
+				if not myModTable.has_key(modname):
+					shouldDownload = True
+				else:
+					if srvModTable[modname] != myModTable[modname]:
+						# different checksum
+						shouldDownload = True
+				
+				if shouldDownload:
+					print ">Update mod %s" % modname
+					f = open("mcdata/mods-%s/%s" % (data["modpackServer"], modname), "wb")
+					f.write(downloadFromModpack(data["modpackServer"], "MADDCRAFT 1.0 getmod %s %s" % (data["modpackServer"], modname)))
+					f.close()
+			
+			# load the config tables
+			myConfigTable = getConfigTable("mcdata/config-%s" % data["modpackServer"])
+			srvConfigTable = json.loads(jsonData)["config"]
+			
+			# delete config files that the server does not announce anymore
+			for filename in myConfigTable.keys():
+				if not srvConfigTable.has_key(filename):
+					print ">Remove config file %s" % filename
+					os.remove("mcdata/config-%s%s" % (data["modpackServer"], filename))
+			
+			# download config files which the client does not have or with mismatching checksums
+			for filename in srvConfigTable.keys():
+				shouldDownload = False
+				dirname = "mcdata/config-%s%s" % (data["modpackServer"], filename.rsplit("/", 1)[0])
+				makeDir(dirname)
+				
+				if not myConfigTable.has_key(filename):
+					shouldDownload = True
+				else:
+					if srvConfigTable[filename] != myConfigTable[filename]:
+						# different checksum
+						shouldDownload = True
+				
+				if shouldDownload:
+					print ">Update config file %s" % filename
+					f = open("mcdata/config-%s%s" % (data["modpackServer"], filename), "wb")
+					f.write(downloadFromModpack(data["modpackServer"], "MADDCRAFT 1.0 getconfig %s %s" % (data["modpackServer"], filename)))
+					f.close()
+					
+		print ">Set up links"
+		createModpackLinks(modDir, configDir)			
 
 	def getLibsFrom(self, version):
 		f = None
 		try:
 			f = open("mcdata/versions/%s/%s.json" % (version, version), "rb")
 		except IOError:
-			makeDir("mcdata/versions/%s" % self.version)
-			self.downloadFile("mcdata/versions/%s/%s.json" % (self.version, self.version),
-					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.json" % (self.version, self.version)
+			makeDir("mcdata/versions/%s" % version)
+			self.downloadFile("mcdata/versions/%s/%s.json" % (version, version),
+					"http://s3.amazonaws.com/Minecraft.Download/versions/%s/%s.json" % (version, version)
 			)
 			f = open("mcdata/versions/%s/%s.json" % (version, version), "rb")
 		sdata = f.read()
@@ -227,6 +355,33 @@ try:
 except:
 	pass
 
+def openRequestPipe(hostname, request):
+	sock = None
+	for family, socktype, proto, canonname, sockaddr in getaddrinfo(hostname, 25666, 0, SOCK_STREAM, IPPROTO_TCP):
+		try:
+			s = socket(family, socktype, proto)
+			s.connect(sockaddr)
+			sock = s
+			break
+		except Exception, e:
+			continue
+	
+	if sock is None:
+		print "Cannot connect to server"
+		return None
+	
+	sock.send(request+"\n")
+	return sock
+
+def readRespLine(sock):
+	respline = ""
+	while True:
+		c = sock.recv(1)
+		if c == "\n":
+			break
+		respline += c
+	return respline
+	
 def saveProfiles():
 	makeDir("mcdata")
 	f = open("mcdata/launcher_profiles.json", "wb")
@@ -245,9 +400,10 @@ def actionLoop():
 	print " 1. Launch a profile."
 	print " 2. Create a new profile (or replace one)."
 	print " 3. Delete a profile."
-	print " 4. Create a profile with custom version info"
+	print " 4. Rename profile"
+	print " 5. Create profile with modpack server"
 	print "(NOTE: There is also a command-line interface; type '%s usage' for more info)" % sys.argv[0]
-	choice = raw_input("Choice (1-4): ")
+	choice = raw_input("Choice (1-5): ")
 	if choice == "1":
 		name = raw_input("Profile to launch: ")
 		if not launcherProfiles["profiles"].has_key(name):
@@ -272,35 +428,72 @@ def actionLoop():
 		name = raw_input("Profile name to delete: ")
 		if launcherProfiles["profiles"].has_key(name):
 			del launcherProfiles["profiles"][name]
+			saveProfiles()
 		print "Profile deleted :)"
 	elif choice == "4":
-		name = raw_input("Profile name to create: ")
-		profinfo = raw_input("Profinfo file: ")
-
-		print ">Get profinfo"
-		info = {}
-		try:
-			f = urllib.urlopen(profinfo)
-			data = f.read()
-			f.close()
-			info = json.loads(data)
-		except:
-			print "proinfo failed"
-			return
-
-		print ">Download patch files"
-		basedir = profinfo.rsplit("/", 1)[0]
-		for filename in info["files"]:
-			if not os.path.exists(filename):
-				downloadFile(filename, basedir+"/"+filename)
-
+		name = raw_input("Enter current name of profile: ")
+		newName = raw_input("Enter new name of said profile: ")
+		
+		if not launcherProfiles["profiles"].has_key(name):
+			print "This profile does not exist."
+		else:
+			profile = launcherProfiles["profiles"][name]
+			del launcherProfiles["profiles"][name]
+			profile["name"] = newName
+			launcherProfiles["profiles"][newName] = profile
+			saveProfiles()
+			print "Profile renamed :)"
+	elif choice == "5":
+		name = raw_input("Enter name of new profile: ")
+		addr = raw_input("Enter address of MaddCraft modpack server: ")
+		
 		print ">Create profile"
+		srv = openRequestPipe(addr, "MADDCRAFT 1.0 stat %s" % addr)
+		if srv is None:
+			return
+			
+		respline = readRespLine(srv)
+		if respline != "MADDCRAFT 1.0 OK":
+			print "Bad response from server: " + respline
+			return
+		
+		info = {}
+		while True:
+			line = readRespLine(srv)
+			if line == "":
+				srv.close()
+				break
+			key, value = line.split(": ", 1)
+			info[key] = value
+		
 		profile = {
-			"name": name,
-			"lastVersionId": info["version"]
+			"name":					name,
+			"lastVersionId":			info["VersionName"],
+			"modpackServer":			info["Server"],
+			"minecraftServer":			info["Minecraft"]
 		}
+		
 		launcherProfiles["profiles"][name] = profile
 		saveProfiles()
+		
+		print ">Download version JSON"
+		makeDir("mcdata/versions/%s" % info["VersionName"])
+		srv = openRequestPipe(addr, "MADDCRAFT 1.0 getjson %s" % addr)
+		respline = readRespLine(srv)
+		if respline.startswith("MADDCRAFT 1.0 0"):
+			print "Server responded with error: " + respline
+			return
+		
+		size = int(respline.split(" ")[2])
+		count = 0
+		
+		f = open("mcdata/versions/%s/%s.json" % (info["VersionName"], info["VersionName"]), "wb")
+		while count < size:
+			data = srv.recv(4096)
+			count += len(data)
+			f.write(data)
+		f.close()
+		srv.close()
 		print "Profile created :)"
 
 def usage():
