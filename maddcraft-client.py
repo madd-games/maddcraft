@@ -245,14 +245,6 @@ class Profile:
 			myConfigTable = getConfigTable("mcdata/config-%s" % data["modpackServer"])
 			srvConfigTable = json.loads(jsonData)["config"]
 
-"""
-			# delete config files that the server does not announce anymore
-			for filename in myConfigTable.keys():
-				if not srvConfigTable.has_key(filename):
-					print ">Remove config file %s" % filename
-					os.remove("mcdata/config-%s%s" % (data["modpackServer"], filename))
-"""
-
 			# download config files which the client does not have or with mismatching checksums
 			for filename in srvConfigTable.keys():
 				shouldDownload = False
