@@ -31,6 +31,9 @@ from zipfile import ZipFile, BadZipfile		# JARs are secretly ZIP files.
 from socket import *
 from md5 import *
 
+# Current "launcher version" emulated by MaddCraft.
+MC_LAUNCHER_VERSION = 18
+
 currentOS = None
 if sys.platform.startswith("win"):
 	currentOS = "windows"
@@ -139,6 +142,8 @@ class Profile:
 
 		self.versionInfo = json.loads(sdata)
 		self.mainClass = self.versionInfo["mainClass"]
+		self.minVersion = self.versionInfo["minimumLauncherVersion"]
+		self.versionType = self.versionInfo["type"]
 		self.mcargs = self.versionInfo["minecraftArguments"]
 		self.jar = "versions/%s/%s.jar" % (self.version, self.version)
 		
@@ -305,6 +310,16 @@ class Profile:
 				self.downloadFile(filename, url)
 
 	def launchcmd(self, username = "MinecraftPlayer"):
+		if self.minVersion > MC_LAUNCHER_VERSION:
+			print "!!! WARNING !!!"
+			print "This profile requires Minecraft launcher version %d." % self.minVersion
+			print "MaddCraft emulates launcher version %d." % MC_LAUNCHER_VERSION
+			print "Running this profile might not work."
+			print " * If it does work, please tell Madd Games so that we get rid of this warning."
+			print " * If it doesn't, tell us so we can fix it."
+			answer = raw_input("Do you want to run this profile? (yes/no) ")
+			if answer != "yes":
+				return "echo"
 		libs = [self.jar]
 		libs.extend(self.libs)
 		cp = ":".join(libs)
@@ -322,6 +337,7 @@ class Profile:
 		args = args.replace("${assets_index_name}", self.versionInfo.get("assets", "legacy"))
 		args = args.replace("${user_properties}", "{}")
 		args = args.replace("${user_type}", "offline")
+		args = args.replace("${version_type}", self.versionType)
 
 		return 'java -cp "%s" -Dfml.ignoreInvalidMinecraftCertificates=true  -Djava.library.path=natives %s %s' % (cp, self.mainClass, args)
 
