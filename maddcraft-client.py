@@ -23,13 +23,16 @@
 #	OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 #	OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 # TODO: OSX perhaps?
+from zipfile import ZipFile, BadZipfile		# JARs are secretly ZIP files.
+from socket import *
+from md5 import *
+from getpass import getpass
 import sys, os
 import json
 import urllib
 import ctypes
-from zipfile import ZipFile, BadZipfile		# JARs are secretly ZIP files.
-from socket import *
-from md5 import *
+import uuid
+import ssl
 
 # Current "launcher version" emulated by MaddCraft.
 MC_LAUNCHER_VERSION = 18
@@ -126,6 +129,10 @@ class Profile:
 		self.version = data["lastVersionId"]
 		self.libs = []
 		self.fileIndex = []
+		
+		self.creds = None
+		if data.has_key("maddcraft-creds"):
+			self.creds = data["maddcraft-creds"]
 
 		# Try loading the version info so that we can launch.
 		f = None
@@ -272,6 +279,9 @@ class Profile:
 		print ">Set up links"
 		createModpackLinks(modDir, configDir)			
 
+	def hasCreds(self):
+		return self.creds is not None
+
 	def getLibsFrom(self, version):
 		f = None
 		try:
@@ -309,6 +319,72 @@ class Profile:
 			if not os.path.exists(filename):
 				self.downloadFile(filename, url)
 
+	def sendAuthRequest(self, endpoint, request):
+		body = json.dumps(request)
+		text = "POST /%s HTTP/1.1\r\nHost: authserver.mojang.com\r\nUser-Agent: MaddCraft by Madd Games\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s" % (endpoint, len(body), body)
+
+		baseSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+		baseSock.connect(("authserver.mojang.com", 443))
+		
+		sock = ssl.wrap_socket(baseSock)
+		sock.send(text)
+		
+		headers = ""
+		
+		while not headers.endswith("\r\n\r\n"):
+			headers += sock.recv(1)
+		
+		lines = headers.split("\r\n")
+		props = {}
+		for line in lines[1:]:
+			if ": " in line:
+				key, value = line.split(": ", 1)
+				props[key] = value
+		
+		if not props.has_key("Content-Length"):
+			return {"error": "", "errorMessage": "No Content-Length in response"}
+		
+		size = int(props["Content-Length"])
+		data = ""
+		while len(data) < size:
+			data += sock.recv(1)
+		
+		sock.close()
+		
+		return json.loads(data)
+			
+	def login(self, username, password):
+		creds = {
+			"username":	username,
+			"uuid":		str(uuid.uuid4())
+		}
+		
+		request = {
+			"agent":	{
+				"name":		"Minecraft",
+				"version":	1
+			},
+			
+			"username":	username,
+			"password":	password,
+			"clientToken":	creds["uuid"]
+		}
+		
+		print ">Authenticate"
+		resp = self.sendAuthRequest("authenticate", request)
+		if resp.has_key("error"):
+			print "ERROR: " + resp["errorMessage"]
+			return
+		
+		creds["accessToken"] = resp["accessToken"]
+		if not resp.has_key("selectedProfile"):
+			print "ERROR: This account is not premium"
+			return
+			
+		creds["name"] = resp["selectedProfile"]["name"]
+		self.data["maddcraft-creds"] = creds
+		print "Login successful!"
+		
 	def launchcmd(self, username = "MinecraftPlayer"):
 		if self.minVersion > MC_LAUNCHER_VERSION:
 			print "!!! WARNING !!!"
@@ -326,14 +402,23 @@ class Profile:
 		if currentOS == "windows":
 			# LOL
 			cp = ";".join(libs).replace("/", "\\")
+
+		authUUID = "null"
+		authToken = "null"
+
+		if username is None:
+			username = self.creds["name"]
+			authUUID = self.creds["uuid"]
+			authToken = self.creds["accessToken"]
+			
 		args = self.mcargs
 		args = args.replace("${auth_player_name}", username)
 		args = args.replace("${version_name}", self.version)
 		args = args.replace("${game_directory}", ".")
 		args = args.replace("${game_assets}", "assets")
 		args = args.replace("${assets_root}", "assets")
-		args = args.replace("${auth_uuid}", "null")
-		args = args.replace("${auth_access_token}", "null")
+		args = args.replace("${auth_uuid}", authUUID)
+		args = args.replace("${auth_access_token}", authToken)
 		args = args.replace("${assets_index_name}", self.versionInfo.get("assets", "legacy"))
 		args = args.replace("${user_properties}", "{}")
 		args = args.replace("${user_type}", "offline")
@@ -412,15 +497,18 @@ def actionLoop():
 	print " 3. Delete a profile."
 	print " 4. Rename profile"
 	print " 5. Create profile with modpack server"
+	print " 6. Log in to a Mojang account"
 	print "(NOTE: There is also a command-line interface; type '%s usage' for more info)" % sys.argv[0]
-	choice = raw_input("Choice (1-5): ")
+	choice = raw_input("Choice (1-6): ")
 	if choice == "1":
 		name = raw_input("Profile to launch: ")
 		if not launcherProfiles["profiles"].has_key(name):
 			print "This profile does not exist!"
 			return
-		username = raw_input("Username: ")
 		p = Profile(launcherProfiles["profiles"][name])
+		username = None
+		if not p.hasCreds():
+			username = raw_input("Username: ")
 		p.downloadMissingFiles()
 		print ">Starting Minecraft..."
 		os.system("cd mcdata && %s" % p.launchcmd(username))
@@ -505,7 +593,16 @@ def actionLoop():
 		f.close()
 		srv.close()
 		print "Profile created :)"
-
+	elif choice == "6":
+		name = raw_input("Profile name: ")
+		username = raw_input("Mojang username: ");
+		print "[[NOTE: The password you type will not appear on screen!]]"
+		password = getpass("Mojang password: ")
+		
+		p = Profile(launcherProfiles["profiles"][name])
+		p.login(username, password)
+		saveProfiles()
+		
 def usage():
 	sys.stderr.write("USAGE:\t%s usage\n" % sys.argv[0])
 	sys.stderr.write("\t\tDisplays this text.\n")
