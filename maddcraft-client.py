@@ -342,7 +342,7 @@ class Profile:
 				props[key] = value
 		
 		if not props.has_key("Content-Length"):
-			return {"error": "", "errorMessage": "No Content-Length in response"}
+			return None
 		
 		size = int(props["Content-Length"])
 		data = ""
@@ -405,11 +405,29 @@ class Profile:
 
 		authUUID = "null"
 		authToken = "null"
-
+		mode = "offline"
+		
 		if username is None:
+			validateReq = {
+				"accessToken":	self.creds["accessToken"],
+				"clientToken":	self.creds["uuid"]
+			}
+			validateResponse = self.sendAuthRequest("validate", validateReq)
+			if validateResponse is not None:
+				refreshReq = {
+					"accessToken":	self.creds["accessToken"],
+					"clientToken":	self.creds["uuid"]
+				}
+				refreshResponse = self.sendAuthRequest("refresh", refreshReq)
+				if refreshResponse.has_key("error"):
+					print "ERROR: %s" % refreshResponse["errorMessage"]
+					return "echo"
+				else:
+					self.creds["accessToken"] = refreshResponse["accessToken"]
 			username = self.creds["name"]
 			authUUID = self.creds["uuid"]
 			authToken = self.creds["accessToken"]
+			mode = "online"
 			
 		args = self.mcargs
 		args = args.replace("${auth_player_name}", username)
@@ -421,7 +439,7 @@ class Profile:
 		args = args.replace("${auth_access_token}", authToken)
 		args = args.replace("${assets_index_name}", self.versionInfo.get("assets", "legacy"))
 		args = args.replace("${user_properties}", "{}")
-		args = args.replace("${user_type}", "offline")
+		args = args.replace("${user_type}", mode)
 		args = args.replace("${version_type}", self.versionType)
 
 		return 'java -cp "%s" -Dfml.ignoreInvalidMinecraftCertificates=true  -Djava.library.path=natives %s %s' % (cp, self.mainClass, args)
