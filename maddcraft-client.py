@@ -503,7 +503,7 @@ def saveProfiles():
 
 def actionLoop():
 	if len(launcherProfiles["profiles"]) == 0:
-		print "There are not profiles yet!"
+		print "There are no profiles yet!"
 	else:
 		print "Current profiles:"
 		for profile in launcherProfiles["profiles"].keys():
